@@ -25,29 +25,32 @@ jobs:
           sudo apt-get install -y curl jq > /dev/null 2>&1
           mkdir -p output
 
-      - name: Execute scan
-        run: |
-          chmod +x ./pii.sh
-          if [ -n "${{ github.event.inputs.target_domain }}" ]; then
-            ./pii.sh "${{ github.event.inputs.target_domain }}" > output/findings.txt 2>/dev/null
-          else
-            ./pii.sh > output/findings.txt 2>/dev/null
-          fi
-          
-          if [ -s output/findings.txt ]; then
-            {
-              echo "Timestamp: $(date -u)"
-              [ -n "${{ github.event.inputs.target_domain }}" ] && echo "Target: ${{ github.event.inputs.target_domain }}"
-              echo "---"
-              cat output/findings.txt
-            } > output/report.txt
-            
-            curl -H "Content-Type: multipart/form-data" \
-                 -F "file=@output/report.txt" \
-                 ${{ secrets.DISCORD_WEBHOOK_URL }} > /dev/null 2>&1
-          fi
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+- name: Execute pii.sh Script
+  run: |
+    mkdir -p output
+    chmod +x ./pii.sh
+    if [ -n "${{ github.event.inputs.target_domain }}" ]; then
+      ./pii.sh "${{ github.event.inputs.target_domain }}" > output/findings.txt
+    else
+      ./pii.sh > output/findings.txt
+    fi
+
+    if [ -s output/findings.txt ]; then
+      {
+        echo "Timestamp: $(date -u)"
+        [ -n "${{ github.event.inputs.target_domain }}" ] && echo "Target: ${{ github.event.inputs.target_domain }}"
+        echo "---"
+        cat output/findings.txt
+      } > output/report.txt
+      
+      curl -H "Content-Type: multipart/form-data" \
+           -F "file=@output/report.txt" \
+           ${{ secrets.SLACK_WEBHOOK_URL }}
+    else
+      echo "No findings detected."
+    fi
+  env:
+    SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
       - name: Cleanup
         run: rm -rf output/
