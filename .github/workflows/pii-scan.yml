@@ -1,0 +1,40 @@
+name: Automated PII Scan
+
+on:
+  schedule:
+    # Run every day at midnight
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    # Allow manual triggers
+    inputs:
+      domain:
+        description: "Domain to scan"
+        required: false
+
+jobs:
+  pii-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set Up Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y curl file grep xargs
+          curl -sSfL https://raw.githubusercontent.com/tomnomnom/uro/master/uro > /usr/local/bin/uro
+          chmod +x /usr/local/bin/uro
+
+      - name: Run Script
+        run: |
+          DOMAIN=${{ github.event.inputs.domain || '' }}
+          chmod +x bounty_tool.sh
+          ./bounty_tool.sh "$DOMAIN"
+
+      - name: Upload Results
+        if: success()
+        uses: actions/upload-artifact@v3
+        with:
+          name: pii-scan-results
+          path: output
