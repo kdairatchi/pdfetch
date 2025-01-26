@@ -5,77 +5,86 @@ on:
     - cron: '0 */6 * * *' # Run every 6 hours
   workflow_dispatch:
     inputs:
-      target_domain:
-        description: 'Enter Target Domain'
+      target_file:
+        description: 'Path to Bounty Targets File'
         required: false
-        type: string
+        default: 'bounty-targets.txt'
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v3
 
       - name: Setup Environment
         run: |
+          echo "[+] Installing dependencies..."
           sudo apt-get update
           sudo apt-get install -y curl jq
           pip install requests uro
-          mkdir -p output && chmod -R 755 output
+          mkdir -p output
 
       - name: Execute PII Scan
         run: |
-          echo "[+] Running PII scan..."
           chmod +x ./pii.sh
+          TARGET_FILE="${{ github.event.inputs.target_file }}"
 
-          if [ -n "${{ github.event.inputs.target_domain }}" ]; then
-            ./pii.sh "${{ github.event.inputs.target_domain }}" > output/findings.txt
+          if [ -f "$TARGET_FILE" ]; then
+            echo "[+] Using target file: $TARGET_FILE"
+            while IFS= read -r domain; do
+              echo "[+] Scanning domain: $domain"
+              ./pii.sh "$domain" >> output/findings.txt
+            done < "$TARGET_FILE"
           else
-            ./pii.sh > output/findings.txt
+            echo "Target file not found: $TARGET_FILE"
+            exit 1
           fi
 
           if [ -s output/findings.txt ]; then
-            echo "[+] Findings detected. Generating report..."
             {
               echo "Timestamp: $(date -u)"
-              [ -n "${{ github.event.inputs.target_domain }}" ] && echo "Target: ${{ github.event.inputs.target_domain }}"
               echo "---"
               cat output/findings.txt
             } > output/report.txt
-            
+
             curl -H "Content-Type: multipart/form-data" \
                  -F "file=@output/report.txt" \
                  ${{ secrets.SLACK_WEBHOOK_URL }}
-            echo "[+] Report sent to Slack."
           else
-            echo "[+] No findings detected. Skipping report generation."
+            echo "[+] No findings detected."
           fi
 
-      - name: Verify Output Directory
+      - name: Debug Directory Structure
         run: |
-          echo "Verifying output directory contents..."
-          ls -l output/
-          cat output/report.txt || echo "No report file found."
+          echo "Files in current directory:"
+          find . -type f
+          echo "Contents of output directory:"
+          ls -l output/ || echo "Output directory not found."
 
       - name: Upload Findings as Artifact
-        if: success()
+        if: always()
         uses: actions/upload-artifact@v3
         with:
           name: PII-Scan-Findings
           path: output/
 
+      - name: Setup Tmate Session
+        if: always()
+        run: |
+          ssh-keygen -t rsa -N "" -f ~/.ssh/id_rsa
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
+
+          SSH_CMD=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+          WEB_URL=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
+
+          curl -X POST -H "Content-Type: application/json" \
+               -d "{\"text\": \"🔐 **SSH Access Details**\n\n**SSH Command:** \`$SSH_CMD\`\n**Web URL:** <$WEB_URL>\n\n**Note:** _Session active for 1 hour(s)_\"}" \
+               ${{ secrets.SLACK_WEBHOOK_URL }}
+
       - name: Cleanup
         run: |
           echo "[+] Cleaning up output directory..."
           rm -rf output/
-          echo "[+] Cleanup complete."
-
-      - name: Notify Failure
-        if: failure()
-        run: |
-          echo "❌ Workflow failed. Check logs for details."
-          curl -X POST -H "Content-Type: application/json" \
-               -d '{"text": "❌ Workflow failed. Check logs for details."}' \
-               ${{ secrets.SLACK_WEBHOOK_URL }}
