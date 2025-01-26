@@ -21,10 +21,17 @@ jobs:
 
       - name: Set Up Dependencies
         run: |
-          sudo apt update
-          sudo apt install -y curl file grep findutils
+          sudo apt-get update
+          sudo apt-get install -y curl file grep findutils coreutils
           curl -sSfL https://raw.githubusercontent.com/tomnomnom/uro/master/uro > /usr/local/bin/uro
           chmod +x /usr/local/bin/uro
+
+      - name: Verify Dependencies
+        run: |
+          xargs --version
+          curl --version
+          file --version
+          grep --version
 
       - name: Run pii.sh Script
         run: |
