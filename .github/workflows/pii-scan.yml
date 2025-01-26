@@ -20,26 +20,22 @@ jobs:
 
       - name: Setup Environment
         run: |
-          echo "[+] Installing dependencies..."
           sudo apt-get update
           sudo apt-get install -y curl jq
           pip install requests uro
-          mkdir -p output
-          echo "[+] Setup complete. Output directory created."
+          mkdir -p output && chmod -R 755 output
 
       - name: Execute PII Scan
         run: |
           echo "[+] Running PII scan..."
           chmod +x ./pii.sh
 
-          # Execute the scan with or without target_domain
           if [ -n "${{ github.event.inputs.target_domain }}" ]; then
             ./pii.sh "${{ github.event.inputs.target_domain }}" > output/findings.txt
           else
             ./pii.sh > output/findings.txt
           fi
 
-          # Check if findings exist and create a report
           if [ -s output/findings.txt ]; then
             echo "[+] Findings detected. Generating report..."
             {
@@ -49,19 +45,37 @@ jobs:
               cat output/findings.txt
             } > output/report.txt
             
-            # Send the report to Discord
             curl -H "Content-Type: multipart/form-data" \
                  -F "file=@output/report.txt" \
-                 ${{ secrets.DISCORD_WEBHOOK_URL }}
-            echo "[+] Report sent to Discord."
+                 ${{ secrets.SLACK_WEBHOOK_URL }}
+            echo "[+] Report sent to Slack."
           else
             echo "[+] No findings detected. Skipping report generation."
           fi
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+      - name: Verify Output Directory
+        run: |
+          echo "Verifying output directory contents..."
+          ls -l output/
+          cat output/report.txt || echo "No report file found."
+
+      - name: Upload Findings as Artifact
+        if: success()
+        uses: actions/upload-artifact@v3
+        with:
+          name: PII-Scan-Findings
+          path: output/
 
       - name: Cleanup
         run: |
           echo "[+] Cleaning up output directory..."
           rm -rf output/
           echo "[+] Cleanup complete."
+
+      - name: Notify Failure
+        if: failure()
+        run: |
+          echo "❌ Workflow failed. Check logs for details."
+          curl -X POST -H "Content-Type: application/json" \
+               -d '{"text": "❌ Workflow failed. Check logs for details."}' \
+               ${{ secrets.SLACK_WEBHOOK_URL }}
