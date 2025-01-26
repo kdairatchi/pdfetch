@@ -22,11 +22,11 @@ jobs:
       - name: Set Up Dependencies
         run: |
           sudo apt update
-          sudo apt install -y curl file grep xargs
+          sudo apt install -y curl file grep findutils
           curl -sSfL https://raw.githubusercontent.com/tomnomnom/uro/master/uro > /usr/local/bin/uro
           chmod +x /usr/local/bin/uro
 
-      - name: Run Script
+      - name: Run pii.sh Script
         run: |
           DOMAIN=${{ github.event.inputs.domain || '' }}
           chmod +x pii.sh
