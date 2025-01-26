@@ -29,8 +29,8 @@ jobs:
       - name: Run Script
         run: |
           DOMAIN=${{ github.event.inputs.domain || '' }}
-          chmod +x bounty_tool.sh
-          ./bounty_tool.sh "$DOMAIN"
+          chmod +x pii.sh
+          ./pii.sh "$DOMAIN"
 
       - name: Upload Results
         if: success()
