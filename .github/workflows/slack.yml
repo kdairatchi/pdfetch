@@ -1,0 +1,87 @@
+name: Routine Scan
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      target_domain:
+        description: 'Enter Target'
+        required: false
+        type: string
+      sleep_duration_hours:
+        description: 'Limit (max: 6hrs)'
+        required: false
+        default: '1'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        
+      - name: Setup
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl jq tmate openssh-client
+          pip install requests uro
+
+      - name: Execute pii.sh Script
+        run: |
+          chmod +x ./pii.sh
+          if [ -n "${{ github.event.inputs.target_domain }}" ]; then
+            ./pii.sh "${{ github.event.inputs.target_domain }}" > output/findings.txt
+          else
+            ./pii.sh > output/findings.txt
+          fi
+
+          if [ -s output/findings.txt ]; then
+            {
+              echo "Timestamp: $(date -u)"
+              [ -n "${{ github.event.inputs.target_domain }}" ] && echo "Target: ${{ github.event.inputs.target_domain }}"
+              echo "---"
+              cat output/findings.txt
+            } > output/report.txt
+            
+            curl -X POST -H "Content-Type: application/json" \
+                 -d @<(jq -R -s --arg text "$(cat output/report.txt)" '{"text": $text}') \
+                 ${{ secrets.SLACK_WEBHOOK_URL }}
+          else
+            echo "No findings detected."
+          fi
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Setup Tmate Session
+        run: |
+          ssh-keygen -t rsa -N "" -f ~/.ssh/id_rsa
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
+          
+          SSH_CMD=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+          WEB_URL=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
+          
+          curl -X POST -H "Content-Type: application/json" \
+               -d "{\"text\": \"🔐 **SSH Access Details**\n\n**SSH Command:** \`$SSH_CMD\`\n**Web URL:** <$WEB_URL>\n\n**Note:** _Session active for ${{ github.event.inputs.sleep_duration_hours }} hour(s)_\"}" \
+               ${{ secrets.SLACK_WEBHOOK_URL }}
+      
+      - name: Keep Alive
+        run: |
+          SLEEP_DURATION=$(( ${{ github.event.inputs.sleep_duration_hours }} * 3600 ))
+          if [ "$SLEEP_DURATION" -gt 21600 ]; then
+            SLEEP_DURATION=21600
+          fi
+          sleep $SLEEP_DURATION
+
+      - name: Cleanup
+        run: |
+          rm -rf output/
+      
+      - name: Notify Failure
+        if: failure()
+        run: |
+          curl -X POST -H "Content-Type: application/json" \
+               -d '{"text": "❌ Workflow failed. Check logs for details."}' \
+               ${{ secrets.SLACK_WEBHOOK_URL }}
